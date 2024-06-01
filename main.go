@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
-	"os"
 	"os/exec"
 	"regexp"
+	"sync"
 )
 
 const (
@@ -19,13 +19,12 @@ const (
 )
 
 const banner = `
-██████╗  ██████╗  ██████╗ ███████╗██████╗ ██╗███╗   ██╗██████╗ ███████╗██████╗ 
-██╔══██╗██╔═══██╗██╔════╝ ██╔════╝██╔══██╗██║████╗  ██║██╔══██╗██╔════╝██╔══██╗
-██████╔╝██║   ██║██║█████╗█████╗  ██║  ██║██║██╔██╗ ██║██║  ██║█████╗  ██████╔╝
-██╔═══╝ ██║   ██║██║╚════╝██╔══╝  ██║  ██║██║██║╚██╗██║██║  ██║██╔══╝  ██╔══██╗
-██║     ╚██████╔╝╚██████╗ ██║     ██████╔╝██║██║ ╚████║██████╔╝███████╗██║  ██║
-╚═╝      ╚═════╝  ╚═════╝ ╚═╝     ╚═════╝ ╚═╝╚═╝  ╚═══╝╚═════╝ ╚══════╝╚═╝  ╚═╝                                                                              
+┌─┐┌─┐┌─┐ ┌─┐┬┌┐┌┌┬┐┌─┐┬─┐
+├─┘│ ││───├┤ ││││ ││├┤ ├┬┘
+┴  └─┘└─┘ └  ┴┘└┘─┴┘└─┘┴└─                                                                              
 `
+
+const version = "1.0.0"
 
 func logo() {
 	fmt.Println(RED + banner + WHITE)
@@ -45,7 +44,7 @@ func getCVE(year string, cveID string) (*CVE, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("CVE not found / other problem")
+		return nil, fmt.Errorf("CVE not found / other problem: %d", resp.StatusCode)
 	}
 
 	body, err := ioutil.ReadAll(resp.Body)
@@ -75,12 +74,13 @@ func extractYearFromCVE(cveID string) (string, error) {
 	return match[1], nil
 }
 
-func cloneRepo(repoURL string) {
+func cloneRepo(repoURL string, wg *sync.WaitGroup) {
+	defer wg.Done()
 	cmd := exec.Command("git", "clone", repoURL)
 	err := cmd.Run()
 	if err != nil {
 		fmt.Println(RED + "[+] Failed to clone repository: " + err.Error() + WHITE)
-		os.Exit(1)
+		return
 	}
 	fmt.Println(GREEN + "[+] Downloading the repository..." + WHITE)
 }
@@ -92,26 +92,34 @@ func customUsage() {
 	fmt.Println("        Enter CVE Number Ex: -cve 'CVE-XXXX-XXXX'")
 	fmt.Println("  -d")
 	fmt.Println("        Clone the GitHub CVE repository")
+	fmt.Println("  -v")
+	fmt.Println("        Display version information")
 }
 
 func main() {
 	cveID := flag.String("cve", "", "Enter CVE Number Ex: -cve 'CVE-XXXX-XXXX'")
 	clone := flag.Bool("d", false, "Clone the GitHub CVE repository")
+	showVersion := flag.Bool("v", false, "Display version information")
 
 	// Set the custom usage function
 	flag.Usage = customUsage
 
 	flag.Parse()
 
+	if *showVersion {
+		fmt.Printf("CVE Checker Version: %s\n", version)
+		return
+	}
+
 	if *cveID == "" {
 		flag.Usage()
-		os.Exit(1)
+		return
 	}
 
 	year, err := extractYearFromCVE(*cveID)
 	if err != nil {
 		fmt.Println(RED + err.Error() + WHITE)
-		os.Exit(1)
+		return
 	}
 
 	logo()
@@ -119,14 +127,17 @@ func main() {
 	cve, err := getCVE(year, *cveID)
 	if err != nil {
 		fmt.Println(RED + err.Error() + WHITE)
-		os.Exit(1)
+		return
 	}
 
 	fmt.Println(GREEN + "[+] Git URL : " + BLUE + cve.HTMLURL + WHITE)
 	fmt.Println(GREEN + "[+] Description : " + BLUE + cve.Description + WHITE)
 
 	if *clone {
-		cloneRepo(cve.HTMLURL)
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go cloneRepo(cve.HTMLURL, &wg)
+		wg.Wait()
 		// If the clone was initiated, print success message after the program has compiled
 		fmt.Println(GREEN + "[+] Successfully downloaded the repository." + WHITE)
 	}
